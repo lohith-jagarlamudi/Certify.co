@@ -68,7 +68,14 @@ def verify_file(f):
         if p.scheme not in {"http","https"} or not p.netloc or not p.path or u in seen: continue
         seen.add(u); sources.append({**s,"url":u})
     uploaded=engine.extract_certificate_fields(text,sources)
-    engine.save_history((cid,name,uploaded.get("student_name"),uploaded.get("issue_date"),"needs_review",datetime.now(timezone.utc).isoformat(),sources[0]["url"] if sources else None,"Duplicate certificate detected." if duplicate else "Uploaded; verification pending.",file_hash))
+    certificate_number=engine.normalize_certificate_number(uploaded.get("certificate_number"))
+    duplicate=engine.find_duplicate(certificate_number,name,file_hash)
+    duplicate_message = {
+        "certificate_number":"Duplicate certificate detected by certificate number.",
+        "filename":"Duplicate upload detected by uploaded filename.",
+        "file_hash":"Duplicate upload detected by file hash.",
+    }.get(duplicate.get("duplicate_match_type") if duplicate else None, "Duplicate upload detected.")
+    engine.save_history((cid,name,uploaded.get("student_name"),uploaded.get("issue_date"),certificate_number,"needs_review",datetime.now(timezone.utc).isoformat(),sources[0]["url"] if sources else None,duplicate_message if duplicate else "Uploaded; verification pending.",file_hash))
     if not sources:
         return {"certificate_id":cid,"status":"needs_review","message":"No QR code or verification link was found in the uploaded certificate.","uploaded_fields":uploaded,"match_report":{},"verification_results":[],"duplicate":bool(duplicate),"file_path":str(path)}
     ensure_browser()

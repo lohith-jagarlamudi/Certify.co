@@ -7,6 +7,6 @@ pypdf==5.1.0
 opencv-python-headless==4.10.0.84
 PyMuPDF==1.25.1
 httpx==0.28.1
-numpy==2.2.1
+numpy==2.4.6
 playwright==1.62.0
 pytesseract==0.3.13

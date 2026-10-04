@@ -46,7 +46,7 @@ def init_db():
     with sqlite3.connect(DB_PATH) as db:
         db.execute("""CREATE TABLE IF NOT EXISTS verification_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT, certificate_id TEXT UNIQUE NOT NULL,
-            filename TEXT, student_name TEXT, issue_date TEXT, status TEXT NOT NULL,
+            filename TEXT, student_name TEXT, issue_date TEXT, certificate_number TEXT, status TEXT NOT NULL,
             verified_at TEXT NOT NULL, verification_url TEXT, message TEXT, review_notes TEXT, reviewed INTEGER NOT NULL DEFAULT 0, file_hash TEXT, reason TEXT, uploaded_fields_json TEXT, browser_fields_json TEXT, browser_text TEXT, match_report_json TEXT
         )""")
         try:
@@ -61,25 +61,70 @@ def init_db():
             db.execute("ALTER TABLE verification_history ADD COLUMN file_hash TEXT")
         except sqlite3.OperationalError:
             pass
-        for column, definition in (("reason", "TEXT"), ("uploaded_fields_json", "TEXT"), ("browser_fields_json", "TEXT"), ("browser_text", "TEXT"), ("match_report_json", "TEXT"), ("reviewed_at", "TEXT"), ("pre_review_status", "TEXT")):
+        for column, definition in (("certificate_number", "TEXT"), ("reason", "TEXT"), ("uploaded_fields_json", "TEXT"), ("browser_fields_json", "TEXT"), ("browser_text", "TEXT"), ("match_report_json", "TEXT"), ("reviewed_at", "TEXT"), ("pre_review_status", "TEXT")):
             try:
                 db.execute(f"ALTER TABLE verification_history ADD COLUMN {column} {definition}")
             except sqlite3.OperationalError:
                 pass
         db.commit()
 
+def normalize_certificate_number(value):
+    if value is None:
+        return None
+    value = str(value).strip().upper()
+    value = re.sub(r"\\s+", "", value)
+    return value or None
+
+def normalize_filename(value):
+    if value is None:
+        return None
+    value = Path(str(value)).name.strip().lower()
+    return value or None
+
+def _row_certificate_number(row):
+    if not row:
+        return None
+    return normalize_certificate_number(row.get("certificate_number"))
+
 def save_history(record):
+    # Backward compatible with the original 9-field API records while allowing
+    # Streamlit to persist the certificate number used by duplicate detection.
+    if len(record) == 10:
+        certificate_id, filename, student_name, issue_date, certificate_number, status, verified_at, verification_url, message, file_hash = record
+    else:
+        certificate_id, filename, student_name, issue_date, status, verified_at, verification_url, message, file_hash = record
+        certificate_number = None
     with sqlite3.connect(DB_PATH) as db:
         db.execute("""INSERT OR REPLACE INTO verification_history
-        (certificate_id, filename, student_name, issue_date, status, verified_at, verification_url, message, file_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", record)
+        (certificate_id, filename, student_name, issue_date, certificate_number, status, verified_at, verification_url, message, file_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (certificate_id, filename, student_name, issue_date, normalize_certificate_number(certificate_number),
+         status, verified_at, verification_url, message, file_hash))
         db.commit()
 
-def find_duplicate(file_hash):
+def find_duplicate(certificate_number=None, filename=None, file_hash=None):
+    # Duplicate hierarchy:
+    # 1) certificate number, 2) original uploaded filename, 3) SHA-256 hash.
     with sqlite3.connect(DB_PATH) as db:
         db.row_factory = sqlite3.Row
-        row = db.execute("SELECT * FROM verification_history WHERE file_hash = ? ORDER BY id DESC LIMIT 1", (file_hash,)).fetchone()
-        return dict(row) if row else None
+        rows = db.execute("SELECT * FROM verification_history ORDER BY id DESC LIMIT 200").fetchall()
+
+    target_number = normalize_certificate_number(certificate_number)
+    target_filename = normalize_filename(filename)
+    target_hash = str(file_hash or "").strip() or None
+
+    for row in rows:
+        item = dict(row)
+        if target_number and _row_certificate_number(item) == target_number:
+            item["duplicate_match_type"] = "certificate_number"
+            return item
+        if target_filename and normalize_filename(item.get("filename")) == target_filename:
+            item["duplicate_match_type"] = "filename"
+            return item
+        if target_hash and item.get("file_hash") == target_hash:
+            item["duplicate_match_type"] = "file_hash"
+            return item
+    return None
 
 def get_history():
     with sqlite3.connect(DB_PATH) as db:

@@ -61,7 +61,7 @@ def init_db():
             db.execute("ALTER TABLE verification_history ADD COLUMN file_hash TEXT")
         except sqlite3.OperationalError:
             pass
-        for column, definition in (("reason", "TEXT"), ("uploaded_fields_json", "TEXT"), ("browser_fields_json", "TEXT"), ("browser_text", "TEXT"), ("match_report_json", "TEXT")):
+        for column, definition in (("reason", "TEXT"), ("uploaded_fields_json", "TEXT"), ("browser_fields_json", "TEXT"), ("browser_text", "TEXT"), ("match_report_json", "TEXT"), ("reviewed_at", "TEXT"), ("pre_review_status", "TEXT")):
             try:
                 db.execute(f"ALTER TABLE verification_history ADD COLUMN {column} {definition}")
             except sqlite3.OperationalError:

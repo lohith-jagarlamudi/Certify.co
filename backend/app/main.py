@@ -89,6 +89,64 @@ def get_history():
 init_db()
 
 
+# Streamlit and API uploads share this validation path. Keep the checks
+# lightweight enough for Community Cloud while rejecting unsupported or
+# obviously corrupt uploads before OCR/QR processing.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ALLOWED_UPLOADS = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+}
+
+
+def validate_upload(data: bytes, filename: str, content_type: str | None = None) -> str:
+    """Validate a certificate upload and return its canonical MIME type."""
+    if not isinstance(data, (bytes, bytearray)) or not data:
+        raise HTTPException(status_code=400, detail="The uploaded certificate is empty.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Certificate upload exceeds the 10 MB limit.")
+
+    safe_name = Path(filename or "certificate").name
+    suffix = Path(safe_name).suffix.lower()
+    canonical = ALLOWED_UPLOADS.get(suffix)
+    if not canonical:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported certificate format. Upload PDF, PNG, JPG, JPEG, WEBP, BMP, TIF or TIFF.",
+        )
+
+    supplied = (content_type or "").lower().split(";", 1)[0].strip()
+    # Browsers/Streamlit may report application/octet-stream; extension and
+    # file signatures are authoritative for those uploads.
+    if supplied and supplied not in {canonical, "application/octet-stream"}:
+        if not (supplied.startswith("image/") and canonical.startswith("image/")):
+            raise HTTPException(status_code=400, detail="The uploaded file type does not match its extension.")
+
+    if canonical == "application/pdf":
+        if not data.startswith(b"%PDF-"):
+            raise HTTPException(status_code=400, detail="The uploaded PDF is not a valid PDF file.")
+        try:
+            from io import BytesIO
+            reader = PdfReader(BytesIO(bytes(data)))
+            if len(reader.pages) == 0:
+                raise ValueError("PDF contains no pages")
+        except Exception:
+            raise HTTPException(status_code=400, detail="The uploaded PDF could not be read.")
+    else:
+        # OpenCV validates common raster formats without trusting the filename.
+        image = cv2.imdecode(np.frombuffer(bytes(data), dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None or image.size == 0:
+            raise HTTPException(status_code=400, detail="The uploaded image could not be decoded.")
+
+    return canonical
+
+
 
 def extract_pdf_text(path: Path) -> str:
     """Extract selectable text and ALWAYS supplement it with OCR.

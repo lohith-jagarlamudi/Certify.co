@@ -255,7 +255,12 @@ def extract_pdf_text(path: Path) -> str:
 
 
 def extract_image_text(path: Path) -> str:
-    """Extract OCR text from uploaded certificate images."""
+    """Extract certificate text with full-page OCR plus focused, layout-aware OCR.
+
+    The focused passes help certificates where a full-page OCR pass confuses
+    large display text, recipient names, or date/role lines. Only OCR output is
+    changed here; QR detection, field mapping, verification, and UI stay intact.
+    """
     if pytesseract is None:
         return ""
 
@@ -276,20 +281,39 @@ def extract_image_text(path: Path) -> str:
     if image is None:
         return ""
 
-    # Upscale small phone/scanned images before OCR.
     height, width = image.shape[:2]
     if max(height, width) < 2200:
-        scale = 2200 / max(height, width)
+        scale = min(2.5, 2200 / max(height, width))
         image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    variants = [image, gray]
-    variants.append(cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1])
-    variants.append(cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11))
+    enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+    binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
-    outputs = []
-    for variant in variants:
-        for psm in (3, 6, 11, 12):
+    outputs: list[str] = []
+    for variant, psm in ((image, 3), (gray, 6), (enhanced, 6), (binary, 11)):
+        try:
+            value = pytesseract.image_to_string(variant, config=f"--oem 1 --psm {psm}").strip()
+            if value:
+                outputs.append(value)
+        except Exception:
+            pass
+
+    h, w = image.shape[:2]
+    regions = [
+        (0.00, 0.00, 1.00, 0.15),  # issue date / organization identifiers
+        (0.03, 0.28, 0.72, 0.48),  # recipient name area
+        (0.04, 0.43, 0.96, 0.70),  # internship/course description and dates
+    ]
+    for left, top, right, bottom in regions:
+        x0, y0 = int(w * left), int(h * top)
+        x1, y1 = int(w * right), int(h * bottom)
+        crop = image[y0:y1, x0:x1]
+        if crop.size == 0:
+            continue
+        crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        crop_gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(crop_gray)
+        for variant, psm in ((crop_gray, 6), (crop_gray, 11)):
             try:
                 value = pytesseract.image_to_string(variant, config=f"--oem 1 --psm {psm}").strip()
                 if value:
@@ -297,8 +321,38 @@ def extract_image_text(path: Path) -> str:
             except Exception:
                 pass
 
-    return "\n".join(dict.fromkeys(outputs)).strip()
+    # Keep the best whole-page pass for context, then add only meaningful
+    # lines from focused crops. This avoids multiplying the same text across
+    # OCR variants and discards logo/signature fragments.
+    primary = outputs[0] if outputs else ""
+    merged: list[str] = []
+    seen_lines: set[str] = set()
 
+    def add_lines(value: str, focused: bool = False) -> None:
+        for raw_line in value.splitlines():
+            line = re.sub(r"\s+", " ", raw_line).strip(" |¦_~")
+            if not line:
+                continue
+            key = re.sub(r"[^a-z0-9]+", "", line.casefold())
+            if len(key) < 3 or key in seen_lines:
+                continue
+            alpha_tokens = re.findall(r"[A-Za-z]{3,}", line)
+            has_date_or_id = bool(re.search(
+                r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|[A-Z]{2,}[-/]?\d{3,}|CIN\s*(?:No)?|issued\s+date)\b",
+                line, re.IGNORECASE
+            ))
+            if focused and len(alpha_tokens) < 3 and not has_date_or_id:
+                continue
+            alnum = sum(ch.isalnum() for ch in line)
+            if focused and len(line) >= 5 and alnum / max(len(line), 1) < 0.60:
+                continue
+            seen_lines.add(key)
+            merged.append(line)
+
+    add_lines(primary)
+    for value in outputs[4:]:
+        add_lines(value, focused=True)
+    return "\n".join(merged).strip()
 
 def clean_url(value: str) -> str:
     return value.rstrip(".,;)]}>")

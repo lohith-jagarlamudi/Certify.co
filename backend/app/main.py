@@ -851,14 +851,17 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
         ]),
         "internship_role": match([
             r"(?:internship|job|training)\s*(?:role|title|position)\s*[:\-]\s*([^\n]+)",
-            r"(?:role|position|designation|job title)\s*[:\-]\s*([^\n]+)",
+            r"(?:role|position|designation|job title|domain)\s*[:\-]\s*([^\n]+)",
+            r"has\s+successfully\s+completed\s+the\s+internship\s+as\s+a?\s*([^\n]+)",
         ]),
         "start_date": match([
             r"(?:start|starting|commencement|joining)\s*(?:date)?\s*[:\-]\s*([^\n]+)",
+            r"\bstart\s+date\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
             r"(?:internship|training)\s+(?:started|commenced)\s+(?:on|from)\s*[:\-]?\s*([^\n]+)",
         ]),
         "end_date": match([
             r"(?:end|ending|completion|termination)\s*(?:date)?\s*[:\-]\s*([^\n]+)",
+            r"\bend\s+date\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
             r"(?:internship|training)\s+(?:ended|completed)\s+(?:on|by)\s*[:\-]?\s*([^\n]+)",
         ]),
         "duration": match([

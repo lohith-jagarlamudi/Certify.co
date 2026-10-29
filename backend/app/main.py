@@ -685,17 +685,22 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
     # Extract URLs independently first. This prevents the validation URL from
     # being consumed by broad words such as "to" or "date".
     urls = re.findall(r"https?://[^\s<>\]\)]+", normalized, flags=re.IGNORECASE)
-    verification_url = next(
-        (u.rstrip(".,;\"'") for u in urls if any(host in u.lower() for host in (
-            "cognitiveclass.ai", "courses.cognitiveclass.ai", "ibm.com", "skills.network"
-        ))),
+    # Prefer the detected QR/link source, including issuers outside IBM.
+    source_urls = [
+        item.get("url") for item in (sources or [])
+        if isinstance(item, dict) and isinstance(item.get("url"), str)
+        and urlparse(item["url"]).scheme in {"http", "https"}
+    ]
+    verification_url = source_urls[0] if source_urls else next(
+        (u.rstrip(".,;\"'") for u in urls if re.search(
+            r"(?:certificates?|credentials?|verify|verification|badges?|accomplishments?)(?:/|\?|#|[-_])",
+            u, flags=re.I
+        )),
         None,
     )
-    if not verification_url and sources:
+    if not verification_url:
         verification_url = next(
-            (item.get("url") for item in sources
-             if isinstance(item, dict) and isinstance(item.get("url"), str)
-             and any(host in item["url"].lower() for host in ("cognitiveclass.ai", "skills.network", "ibm.com"))),
+            (u.rstrip(".,;\"'") for u in urls if urlparse(u).scheme in {"http", "https"}),
             None,
         )
 
@@ -733,6 +738,9 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
     recipient_patterns = [
         r"(?:this\s+is\s+to\s+certif(?:y|ied)\s+that|certificate\s+has\s+been\s+issued\s+to|(?:awarded|presented|issued)\s+to)\s*[:\-]?\s*([^\n\r]+)",
         r"(?:student|intern|trainee|candidate|recipient|learner|credential\s+holder)\s*(?:full\s*)?name\s*[:\-]\s*([^\n\r]+)",
+        # CS50 certificates place the recipient after the "CS50 congratulates" heading.
+        r"CS50\s+congratulates\s*\n+\s*([A-Z][A-Za-z .,'’\-]{1,100}?)\s*\n+\s*on\s+completion\b",
+        r"congratulates\s+([A-Z][A-Za-z .,'’\-]{1,100}?)\s+on\s+completion\b",
     ]
     if is_verification_page:
         recipient_patterns.extend([
@@ -867,13 +875,15 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
         "start_date": match([
             r"(?:start|starting|commencement|joining)\s*(?:date)?\s*[:\-]\s*([^\n]+)",
             r"\bstart\s+date\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
-            r"\bdated\s+from\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+to\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}",
+            r"\bdated\s+from\s+(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s+to\s+\d{1,2}[./-]\d{1,2}[./-]\d{2,4}",
+            r"\bfrom\s+(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\s+to\s+\d{1,2}[./-]\d{1,2}[./-]\d{2,4}",
             r"(?:internship|training)\s+(?:started|commenced)\s+(?:on|from)\s*[:\-]?\s*([^\n]+)",
         ]),
         "end_date": match([
             r"(?:end|ending|completion|termination)\s*(?:date)?\s*[:\-]\s*([^\n]+)",
             r"\bend\s+date\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
-            r"\bdated\s+from\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+to\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+            r"\bdated\s+from\s+\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+to\s+(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
+            r"\bfrom\s+\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+to\s+(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})
             r"(?:internship|training)\s+(?:ended|completed)\s+(?:on|by)\s*[:\-]?\s*([^\n]+)",
         ]),
         "duration": match([

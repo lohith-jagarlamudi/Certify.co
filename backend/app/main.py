@@ -661,7 +661,10 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
     if not text or not text.strip():
         return {}
 
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Browser/JSON extraction can return escaped newlines as literal backslash sequences.
+    # Decode them before matching fields so labels cannot consume the whole page.
+    normalized = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n").replace("\\t", " ")
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
     normalized = re.sub(r"[ \t]+", " ", normalized)
 
     def clean(value: str | None) -> str | None:
@@ -733,6 +736,8 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
     ]
     if is_verification_page:
         recipient_patterns.extend([
+            # Unified Mentor recipient appears before the completion sentence.
+            r"\b([A-Z][A-Z .,'’\-]{1,100}?)\s+has\s+successfully\s+completed\s+the\s+internship\b",
             # Cognitive Class / IBM Skills Network record wording.
             r"cognitive\s+class\s+acknowledges\s+([A-Za-z][A-Za-z .,'’\-]{0,100}?)\s+(?:for|on)\b",
             r"\backnowledges\s+([A-Za-z][A-Za-z .,'’\-]{0,100}?)\s+for\s+successfully\s+completing\b",
@@ -848,13 +853,15 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
         "student_name": student_name,
         "company_name": match([
             r"(?:company|organization|organisation|employer|host company|host organization)\s*(?:name)?\s*[:\-]\s*([^\n]+)",
-            r"\bat\s+([\s\S]+?)\s+dated\s+from\b",
-            r"\bat\s+([\s\S]+?)\s+dated\b",
+            r"\bat\s+(Unified\s+Mentor(?:\s+Pvt\.?\s*Ltd\.?)?)",
+            r"\bat\s+(UnifiedMentor)",
+            r"\bat\s+([^\n.]{2,70}?)\s+dated\s+from\b",
+            r"\bat\s+([^\n.]{2,70}?)\s+dated\b",
         ]),
         "internship_role": match([
             r"(?:internship|job|training)\s*(?:role|title|position)\s*[:\-]\s*([^\n]+)",
             r"(?:role|position|designation|job title|domain)\s*[:\-]\s*([^\n]+)",
-            r"\bas\s+([A-Za-z][A-Za-z0-9 &/.-]{1,80}?)\s+at\s+",
+            r"\bas\s+(?:(?:a|an)\s+)?([A-Za-z][A-Za-z0-9 &/.-]{1,80}?)\s+at\b",
             r"has\s+successfully\s+completed\s+the\s+internship\s+as\s+a?\s*([^\n]+)",
         ]),
         "start_date": match([
@@ -1127,6 +1134,10 @@ def _normalise(value, field: str | None = None) -> str:
         "",
         text,
     )
+    if field == "company_name":
+        # Ignore common legal suffixes when comparing the same organization.
+        text = re.sub(r"\b(?:private\s+limited|pvt\.?\s*ltd\.?|limited|ltd\.?|incorporated|inc\.?|llc)\b", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
     return re.sub(r"[^a-z0-9]", "", text)
 
 

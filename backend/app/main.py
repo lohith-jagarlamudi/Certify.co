@@ -848,8 +848,8 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
         "student_name": student_name,
         "company_name": match([
             r"(?:company|organization|organisation|employer|host company|host organization)\s*(?:name)?\s*[:\-]\s*([^\n]+)",
-            r"\bat\s+(.+?)\s+dated\s+from\b",
-            r"\bat\s+(.+?)\s+dated\b",
+            r"\bat\s+([\s\S]+?)\s+dated\s+from\b",
+            r"\bat\s+([\s\S]+?)\s+dated\b",
         ]),
         "internship_role": match([
             r"(?:internship|job|training)\s*(?:role|title|position)\s*[:\-]\s*([^\n]+)",

@@ -30,7 +30,7 @@ try:
             page.wait_for_function(
                 """() => {
                     const t = (document.body?.innerText || '').toLowerCase();
-                    return /completed by|student name|recipient|domain|internship role|start date|end date|duration|certificate details|verification result/.test(t);
+                    return /completed by|student name|recipient|domain|internship role|start date|end date|duration|certificate details|verification result|verified certificate|successfully completed/.test(t);
                 }""",
                 timeout=7000,
             )

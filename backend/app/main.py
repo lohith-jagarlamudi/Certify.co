@@ -721,11 +721,24 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
         return candidate
 
     student_name = None
+    is_verification_page = any(
+        isinstance(item, dict) and item.get("source_type") == "link"
+        for item in (sources or [])
+    )
     # 1) Explicit recipient markers. Keep the capture on one line when possible.
+    # Issuer pages often use prose rather than a "Student name:" label.
     recipient_patterns = [
         r"(?:this\s+is\s+to\s+certif(?:y|ied)\s+that|certificate\s+has\s+been\s+issued\s+to|(?:awarded|presented|issued)\s+to)\s*[:\-]?\s*([^\n\r]+)",
-        r"(?:student|intern|trainee|candidate)\s*(?:full\s*)?name\s*[:\-]\s*([^\n\r]+)",
+        r"(?:student|intern|trainee|candidate|recipient|learner|credential\s+holder)\s*(?:full\s*)?name\s*[:\-]\s*([^\n\r]+)",
     ]
+    if is_verification_page:
+        recipient_patterns.extend([
+            # Cognitive Class / IBM Skills Network record wording.
+            r"cognitive\s+class\s+acknowledges\s+([A-Za-z][A-Za-z .,'’\-]{0,100}?)\s+(?:for|on)\b",
+            r"\backnowledges\s+([A-Za-z][A-Za-z .,'’\-]{0,100}?)\s+for\s+successfully\s+completing\b",
+            r"\bcompleted\s+by\s*[:\-]?\s*([^\n\r]+)",
+            r"\b(?:recipient|learner|credential\s+holder|name)\s*[:\-]\s*([^\n\r]+)",
+        ])
     for pattern in recipient_patterns:
         for found in re.finditer(pattern, normalized, flags=re.I | re.MULTILINE):
             candidate = recipient_candidate(found.group(1))

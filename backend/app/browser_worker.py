@@ -74,7 +74,7 @@ try:
                     return s && s.display !== 'none' && s.visibility !== 'hidden' &&
                            Number(s.opacity || 1) !== 0 && r.width > 0 && r.height > 0;
                 };
-                const clean = s => (s || '').replace(/\\s+/g, ' ').trim();
+                const clean = s => (s || '').replace(/\s+/g, ' ').trim();
                 const out = [];
                 const add = (label, value) => {
                     label = clean(label).replace(/[:：]$/, '');

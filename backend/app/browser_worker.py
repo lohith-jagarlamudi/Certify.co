@@ -43,18 +43,78 @@ try:
         final_url = page.url
         status = response.status if response else None
         text_parts = []
-        seen = set()
+        seen_blocks = set()
+        seen_lines = set()
 
         def add_text(value):
-            value = "\n".join(line.strip() for line in (value or "").splitlines() if line.strip())
-            if value and value not in seen:
-                seen.add(value)
-                text_parts.append(value)
+            # Deduplicate at line level because certificate portals commonly
+            # repeat the same record in <main>, <table>, and <body>.
+            lines = []
+            for line in (value or "").splitlines():
+                line = " ".join(line.split()).strip()
+                if not line:
+                    continue
+                key = line.casefold()
+                if key not in seen_lines:
+                    seen_lines.add(key)
+                    lines.append(line)
+            block = "\n".join(lines)
+            if block and block not in seen_blocks:
+                seen_blocks.add(block)
+                text_parts.append(block)
 
-        # Visible body text is the primary source; targeted semantic containers
-        # help when a site's page body includes navigation/footer text around
-        # the actual certificate record.
-        for selector in ("main", "[role=main]", "article", "table", "dl"):
+        # First extract semantic label/value pairs. Many verification pages
+        # render labels and values in separate DOM nodes, so raw innerText can
+        # lose the association needed by extract_certificate_fields().
+        try:
+            pairs = page.evaluate("""() => {
+                const visible = el => {
+                    const s = getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return s && s.display !== 'none' && s.visibility !== 'hidden' &&
+                           Number(s.opacity || 1) !== 0 && r.width > 0 && r.height > 0;
+                };
+                const clean = s => (s || '').replace(/\\s+/g, ' ').trim();
+                const out = [];
+                const add = (label, value) => {
+                    label = clean(label).replace(/[:：]$/, '');
+                    value = clean(value);
+                    if (!label || !value || label.length > 80 || value.length > 500) return;
+                    if (label.toLowerCase() === value.toLowerCase()) return;
+                    out.push(label + ': ' + value);
+                };
+                // Definition lists preserve an explicit label/value relation.
+                document.querySelectorAll('dt').forEach(label => {
+                    if (!visible(label)) return;
+                    const value = label.nextElementSibling;
+                    if (value && value.matches('dd') && visible(value)) add(label.innerText, value.innerText);
+                });
+                // Table headers and cells: pair each row's first cell with its value.
+                document.querySelectorAll('tr').forEach(row => {
+                    if (!visible(row)) return;
+                    const cells = [...row.querySelectorAll(':scope > th, :scope > td')].filter(visible);
+                    if (cells.length >= 2) add(cells[0].innerText, cells.slice(1).map(c => c.innerText).join(' '));
+                });
+                // Common label/value layouts used by credential providers.
+                document.querySelectorAll('label, [class*="label" i], [data-testid*="label" i]').forEach(label => {
+                    if (!visible(label)) return;
+                    const parent = label.parentElement;
+                    if (!parent || !visible(parent)) return;
+                    let value = label.nextElementSibling;
+                    if (!value) value = parent.querySelector('dd, output, input, [class*="value" i], [data-testid*="value" i]');
+                    if (value && value !== label && visible(value)) {
+                        add(label.innerText || label.getAttribute('aria-label'), value.value || value.innerText || value.textContent);
+                    }
+                });
+                return [...new Set(out)];
+            }""")
+            add_text("\n".join(pairs || []))
+        except Exception:
+            pass
+
+        # Prefer focused certificate-record containers before page-wide text.
+        # This keeps navigation and footer content from winning field matches.
+        for selector in ("main", "[role=main]", "article", "[class*='certificate' i]", "[class*='credential' i]", "table", "dl"):
             try:
                 for element in page.locator(selector).all():
                     if element.is_visible():

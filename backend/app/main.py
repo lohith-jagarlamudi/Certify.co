@@ -848,27 +848,40 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
         "student_name": student_name,
         "company_name": match([
             r"(?:company|organization|organisation|employer|host company|host organization)\s*(?:name)?\s*[:\-]\s*([^\n]+)",
+            r"\bat\s+(.+?)\s+dated\s+from\b",
+            r"\bat\s+(.+?)\s+dated\b",
         ]),
         "internship_role": match([
             r"(?:internship|job|training)\s*(?:role|title|position)\s*[:\-]\s*([^\n]+)",
             r"(?:role|position|designation|job title|domain)\s*[:\-]\s*([^\n]+)",
+            r"\bas\s+([A-Za-z][A-Za-z0-9 &/.-]{1,80}?)\s+at\s+",
             r"has\s+successfully\s+completed\s+the\s+internship\s+as\s+a?\s*([^\n]+)",
         ]),
         "start_date": match([
             r"(?:start|starting|commencement|joining)\s*(?:date)?\s*[:\-]\s*([^\n]+)",
             r"\bstart\s+date\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
+            r"\bdated\s+from\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+to\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}",
             r"(?:internship|training)\s+(?:started|commenced)\s+(?:on|from)\s*[:\-]?\s*([^\n]+)",
         ]),
         "end_date": match([
             r"(?:end|ending|completion|termination)\s*(?:date)?\s*[:\-]\s*([^\n]+)",
             r"\bend\s+date\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
+            r"\bdated\s+from\s+\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+to\s+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
             r"(?:internship|training)\s+(?:ended|completed)\s+(?:on|by)\s*[:\-]?\s*([^\n]+)",
         ]),
         "duration": match([
             r"(?:duration|period|tenure)\s*[:\-]\s*([^\n]+)",
+            r"for\s+successfully\s+completing\s+(\d+\s+(?:days?|weeks?|months?|years?))\s+(?:internship|training)",
             r"for a period of\s+([0-9]+\s+(?:days?|weeks?|months?|years?))",
         ]),
-        "issue_date": extract_issue_date(normalized),
+        "issue_date": (
+            extract_issue_date(normalized)
+            if not is_verification_page or re.search(
+                r"\b(?:issue\s+date|issued\s+date|date\s+of\s+issue|date\s+issued|issued\s+on)\b",
+                normalized, flags=re.I
+            )
+            else None
+        ),
         "certificate_number": certificate_number,
         "verification_url": verification_url,
     }
@@ -1062,7 +1075,12 @@ def _unavailable(value) -> bool:
         "none",
         "null",
     )
-    return any(marker in compact for marker in markers)
+    # Short sentinels such as "na" must match the entire normalized value.
+    # Substring matching incorrectly marked real names like "ADEPU NARESH" missing.
+    if compact in {"na", "n a", "n/a", "none", "null"}:
+        return True
+    phrase_markers = tuple(marker for marker in markers if marker not in {"na", "n/a", "none", "null"})
+    return any(marker in compact for marker in phrase_markers)
 
 
 def _present(value) -> bool:
@@ -1123,9 +1141,7 @@ def compare_certificate_fields(uploaded: dict, browser: dict) -> dict:
         "start_date": "Start date",
         "end_date": "End date",
         "duration": "Duration",
-        # The issued date is a mapped verification field. If it differs from
-        # the verification record, the certificate must be Not Verified.
-        "issue_date": "Issue date",
+        # Issue date is extracted metadata, not a comparison field.
     }
     comparisons = []
     for key, label in labels.items():

@@ -883,7 +883,7 @@ def extract_certificate_fields(text: str, sources: list[dict] | None = None) -> 
             r"(?:end|ending|completion|termination)\s*(?:date)?\s*[:\-]\s*([^\n]+)",
             r"\bend\s+date\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
             r"\bdated\s+from\s+\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+to\s+(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
-            r"\bfrom\s+\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+to\s+(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})
+            r"\bfrom\s+\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+to\s+(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
             r"(?:internship|training)\s+(?:ended|completed)\s+(?:on|by)\s*[:\-]?\s*([^\n]+)",
         ]),
         "duration": match([

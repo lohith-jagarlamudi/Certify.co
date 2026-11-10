@@ -20,6 +20,85 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app import main as engine
 
+# Gemini extraction is optional and uses a server-side Streamlit secret.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+try:
+    if not GEMINI_API_KEY and "GEMINI_API_KEY" in st.secrets:
+        GEMINI_API_KEY = str(st.secrets["GEMINI_API_KEY"]).strip()
+        os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
+except Exception:
+    pass
+
+
+def gemini_enrich_fields(source_text, deterministic_fields, source_kind):
+    """Use Gemini to map issuer/certificate text into the fixed comparison schema.
+
+    Deterministic extraction remains the baseline. Gemini only fills missing values
+    or replaces a value when it returns strong confidence and direct evidence.
+    """
+    fields = dict(deterministic_fields or {})
+    if not GEMINI_API_KEY or not source_text or not str(source_text).strip():
+        return fields
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        schema = {
+            "type": "OBJECT",
+            "properties": {
+                "fields": {"type": "OBJECT", "properties": {
+                    key: {"type": "STRING", "nullable": True} for key in FIELD_LABELS
+                }, "required": list(FIELD_LABELS), "propertyOrdering": list(FIELD_LABELS)},
+                "confidence": {"type": "OBJECT", "properties": {
+                    key: {"type": "NUMBER"} for key in FIELD_LABELS
+                }, "required": list(FIELD_LABELS), "propertyOrdering": list(FIELD_LABELS)},
+                "evidence": {"type": "OBJECT", "properties": {
+                    key: {"type": "STRING"} for key in FIELD_LABELS
+                }, "required": list(FIELD_LABELS), "propertyOrdering": list(FIELD_LABELS)}
+            },
+            "required": ["fields", "confidence", "evidence"],
+            "propertyOrdering": ["fields", "confidence", "evidence"]
+        }
+        prompt = f"""Extract internship-certificate facts from the {source_kind} text below.
+Return only values explicitly supported by the text. Map each value to its exact field:
+student_name = certificate recipient/intern, never signatory or verifier;
+company_name = issuing/employer organization, not a hosting platform;
+internship_role = role/title/domain;
+start_date and end_date = internship period, not issue/verification dates;
+certificate_number = certificate/credential ID;
+duration = stated duration;
+issue_date = date certificate was issued.
+Do not infer missing values. Preserve names and IDs exactly. Dates should be returned as shown.
+For every field provide confidence from 0 to 1 and a short verbatim evidence phrase; use empty evidence and 0 confidence when absent.
+TEXT:\n{str(source_text)[:45000]}"""
+        response = client.models.generate_content(
+            model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=schema, temperature=0),
+        )
+        payload = json.loads(response.text or "{}")
+        ai_fields = payload.get("fields", {})
+        confidence = payload.get("confidence", {})
+        evidence = payload.get("evidence", {})
+        for key in FIELD_LABELS:
+            candidate = ai_fields.get(key)
+            score = float(confidence.get(key) or 0)
+            proof = str(evidence.get(key) or "").strip()
+            if not candidate or not proof or score < 0.82:
+                continue
+            candidate = str(candidate).strip()
+            if not candidate:
+                continue
+            # Only replace a deterministic value when Gemini has strong evidence.
+            if not fields.get(key) or score >= 0.92:
+                fields[key] = candidate
+        fields["_gemini_extraction"] = {"model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), "confidence": confidence, "evidence": evidence}
+    except Exception as exc:
+        # AI failure must not break certificate verification.
+        fields["_gemini_error"] = type(exc).__name__
+    return fields
+
+
 FIELD_LABELS = {
     "student_name": "Student name",
     "company_name": "Company name",
@@ -146,6 +225,7 @@ def process_upload(uploaded_file):
 
     sources = engine.detect_verification_sources(destination, content_type, text)
     fields = engine.extract_certificate_fields(text, sources) if text or sources else {}
+    fields = gemini_enrich_fields(text, fields, "uploaded certificate")
     certificate_number = engine.normalize_certificate_number(fields.get("certificate_number"))
     duplicate = engine.find_duplicate(certificate_number, original_name, file_hash)
     if duplicate:
@@ -181,6 +261,7 @@ def process_upload(uploaded_file):
             browser_result = engine.verify_with_browser(source["url"])
             browser_text = browser_result.get("text") or ""
             browser_fields = engine.extract_certificate_fields(browser_text, [{"url": source["url"], "source_type": "link"}]) if browser_text else {}
+            browser_fields = gemini_enrich_fields(browser_text, browser_fields, "issuer verification webpage")
             match_report = engine.compare_certificate_fields(fields, browser_fields)
             results.append({**source, **browser_result, "browser_text": browser_text, "browser_fields": browser_fields, "match_report": match_report})
 
